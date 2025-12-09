@@ -7,6 +7,100 @@ CurrentModule = MathOptInterface
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## v1.46.0 (October 21, 2025)
+
+### Added
+
+ - Added [`VectorNonlinearOracle`](@ref) (#2860)
+
+### Fixed
+
+ - Fixed [`Bridges.Constraint.IndicatorToMILPBridge`](@ref) when the `z` variable
+   was not binary (#2857), (#2868)
+ - Fixed an `error` to [`GetAttributeNotAllowed`](@ref) in
+   [`Bridges.Variable.ZerosBridge`](@ref) (#2863)
+ - Fixed various bridges to throw MOI error subtypes instead of `Base.error()`
+   (#2866)
+
+### Other
+
+ - Documentation updates (#2855), (#2858), (#2864)
+ - Added `@nospecialize` to some methods (#2830)
+
+## v1.45.0 (September 20, 2025)
+
+### Added
+
+ - Added [`Bridges.Objective.ToScalarNonlinearBridge`](@ref) (#2834), (#2835)
+ - Added support for querying [`ConstraintConflictStatus`](@ref) when
+   the constraint was bridged (#2839)
+
+### Fixed
+
+ - Fixed a type instability in [`Utilities.set_dot`](@ref) (#2831)
+ - Rewrote `Base.read!(::IO, ::FileFormats.LP.Model)` to use a proper recursive
+   descent parser. This fixed numerous performance issues, and the resulting
+   parser is simpler to maintain and extend. (#2840), (#2841), (#2842), (#2843),
+   (#2844), (#2846), (#2847), (#2848), (#2852), (#2853)
+ - Rewrote the error handling in `read!(::IO, ::FileFormats.MPS.Model)` to throw
+   a `FileFormats.MPS.ParseError` (#2845), (#2849)
+
+### Other
+
+- Temporarily pinned `OpenSSL_jll` to work around an upstream bug (#2850), (#2854)
+
+## v1.44.0 (September 4, 2025)
+
+### Added
+
+ - Added support for [`VariableName`](@ref) in variable bridges (#2822)
+
+### Fixed
+
+ - Fixed use of deprecated `IntDisjointSets` (#2824), (#2828)
+ - Fixed `Utilities.get_fallback` for [`DualObjectiveValue`](@ref) with open
+   intervals (#2823) (#2826)
+
+## v1.43.0 (August 21, 2025)
+
+### Added
+
+ - Added [`ConflictCount`](@ref) and `conflict_index` to
+   [`ConstraintConflictStatus`](@ref) (#2775), (#2800), (#2801)
+ - Added [`Bridges.Constraint.IntervalToHyperRectangleBridge`](@ref) (#2754),
+   (#2806), (#2809)
+
+### Fixed
+
+ - Fixed the MPS reader to support any whitespace as a field separator (#2798)
+ - Fixed tests with duplicate names and added a CI test (#2804), (#2805)
+ - Fixed parsing `x * x` as `x^2` in `Nonlinear.Model` (#2799)
+ - Fixed a bug in [`Utilities.operate`](@ref) with quadratic outputs when a
+   `Integer` coefficient differs from the machine `Integer` (#2807)
+ - Fixed `MOI.supports` of `MOI.ObjectiveFunction` in all file formats (#2814)
+ - Fixed free rows in [`Bridges.Constraint.SplitHyperRectangleBridge`](@ref) (#2816)
+ - Fixed deleting a variable with constraint bridges (#2818)
+ - Fixed `Utilities.AbstractModel` with no constraints (#2819)
+
+### Other
+
+ - Added an OPF benchmark (#2739)
+ - Updated to DataStructures@0.19 (#2796)
+ - Filter `identity_bridge.jl` out from `runtests` (#2812)
+
+## v1.42.1 (August 1, 2025)
+
+### Fixed
+
+ - Fixed reading MPS models with extra ROWS fields (#2793)
+
+### Other
+
+ - Added more packages to solver-tests.yml (#2785)
+ - Added a test to MPS reader that duplicate entries are summed (#2787)
+ - Fixed docstring of `inverse_trimap` (#2790)
+ - Removed useless prefix in `set_dot` (#2791)
+
 ## v1.42.0 (July 10, 2025)
 
 ### Added

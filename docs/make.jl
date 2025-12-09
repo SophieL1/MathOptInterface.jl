@@ -67,6 +67,7 @@ const _PAGES = [
         "FileFormats" => [
             "Overview" => "submodules/FileFormats/overview.md",
             "API Reference" => "submodules/FileFormats/reference.md",
+            "The LP file format" => "submodules/FileFormats/LP.md",
         ],
         "Nonlinear" => [
             "Overview" => "submodules/Nonlinear/overview.md",
@@ -82,7 +83,8 @@ const _PAGES = [
             "API Reference" => "submodules/Test/reference.md",
         ],
     ],
-    "Developer Docs" => ["developer/checklists.md"],
+    "Developer Docs" =>
+        ["developer/checklists.md", "developer/contributing.md"],
     "Release notes" => "release_notes.md",
 ]
 
@@ -157,6 +159,8 @@ Documenter.DocMeta.setdocmeta!(
         # Ignore the very many GitHub links
         r"https://github.com/jump-dev/.+",
         "https://arxiv.org/abs/2002.03447",
+        # https://github.com/JuliaDocs/Documenter.jl/issues/2834
+        "https://lpsolve.sourceforge.net/5.5/CPLEX-format.htm",
     ],
     modules = [MathOptInterface],
     checkdocs = :exports,

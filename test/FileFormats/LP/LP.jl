@@ -245,9 +245,7 @@ end
 
 function test_free_variables_reading()
     for case in ["free", "Free", "FreE", "frEe"]
-        io = IOBuffer()
-        write(io, "Minimize\nobj: x\nsubject to\nBounds\nx $case\nEnd")
-        seekstart(io)
+        io = IOBuffer("Minimize\nobj: x\nsubject to\nBounds\nx $case\nEnd")
         model = MOI.FileFormats.LP.Model()
         read!(io, model)
         out = IOBuffer()
@@ -261,9 +259,7 @@ end
 
 function test_integer_variables_reading()
     for case in ["general", "GeneRalS", "Integer", "InTegeRs"]
-        io = IOBuffer()
-        write(io, "Minimize\nobj: x\nsubject to\n$case\nx\nEnd")
-        seekstart(io)
+        io = IOBuffer("Minimize\nobj: x\nsubject to\n$case\nx\nEnd")
         model = MOI.FileFormats.LP.Model()
         read!(io, model)
         out = IOBuffer()
@@ -441,26 +437,85 @@ end
 ### Read tests
 ###
 
-function test_read_invalid()
-    models = joinpath(@__DIR__, "models")
-    for filename in filter(f -> startswith(f, "invalid_"), readdir(models))
-        model = LP.Model()
-        @test_throws(
-            ErrorException,
-            MOI.read_from_file(model, joinpath(models, filename)),
-        )
+macro test_parse_error(result, expr)
+    return quote
+        ret = try
+            $(esc(expr))
+        catch err
+            sprint(showerror, err)
+        end
+        @test ret == $(esc(result))
     end
+end
+
+function test_read_invalid()
+    dir = joinpath(@__DIR__, "models")
+    @test_parse_error(
+        """
+        Error parsing LP file on line 7:
+        C: 1 x <= 2
+        ^
+        Got an identifier with value `C`. No file contents are allowed after `end`.""",
+        MOI.read_from_file(LP.Model(), joinpath(dir, "invalid_after_end.lp")),
+    )
+    @test_parse_error(
+        """
+        Error parsing LP file on line 6:
+         x1 != 10
+            ^
+        Got an identifier with value `!`. We expected this to be an inequality like `>=`, `<=`, or `==`.""",
+        MOI.read_from_file(LP.Model(), joinpath(dir, "invalid_bound_2.lp")),
+    )
+    @test_parse_error(
+        """
+        Error parsing LP file on line 6:
+        c2:  2 x1 + x2 + c2: + 3 x3 + x4 >= 15
+                           ^
+        Got the symbol `:`. We expected this to be an inequality like `>=`, `<=`, or `==`.""",
+        MOI.read_from_file(LP.Model(), joinpath(dir, "invalid_constraint.lp")),
+    )
+    @test_parse_error(
+        """
+        Error parsing LP file on line 10:
+         csos2: S2::
+                    ^
+        Got a new line. SOS constraints cannot be spread across lines.""",
+        MOI.read_from_file(
+            LP.Model(),
+            joinpath(dir, "invalid_sos_constraint.lp"),
+        ),
+    )
+    @test_parse_error(
+        """
+        Error parsing LP file on line 10:
+         csos2: S3:: V2:2 V4:1 V5:2.5
+                ^
+        Got an identifier with value `S3`. This must be either `S1` for SOS-I or `S2` for SOS-II.""",
+        MOI.read_from_file(LP.Model(), joinpath(dir, "invalid_sos_set.lp")),
+    )
+    @test_parse_error(
+        """
+        Error parsing LP file on line 3:
+        obj: 3 1x1 + x2 + 5 x3 + x4
+               ^
+        Got a number with value `1`. We expected this token to be a keyword defining a new section.""",
+        MOI.read_from_file(
+            LP.Model(),
+            joinpath(dir, "invalid_variable_name.lp"),
+        ),
+    )
     return
 end
 
 function test_read_unexpected_line()
-    io = IOBuffer()
-    line = "MinimizeSubject to x + y = 0"
-    print(io, line)
-    seekstart(io)
+    io = IOBuffer("MinimizeSubject to x + y = 0")
     model = LP.Model()
-    @test_throws(
-        ErrorException("Unable to read LP file: unexpected line: $(line)"),
+    @test_parse_error(
+        """
+        Error parsing LP file on line 1:
+        MinimizeSubject to x + y = 0
+        ^
+        Got an identifier with value `MinimizeSubject`. We expected this token to be a keyword defining a new section.""",
         read!(io, model),
     )
     return
@@ -513,7 +568,7 @@ function test_read_model1_tricky()
     @test occursin("CON4: 1 V5 + 1 V6 + 1 V7 <= 1", file)
     @test occursin("CON1: 1 V1 >= 0", file)
     @test occursin("CON5: [ 1 Var4 ^ 2 - 1.2 V5 * V1 ] <= 0", file)
-    @test occursin("R1: 1 V2 >= 2", file)
+    @test occursin("1 V2 >= 2", file)
     @test occursin("-infinity <= V1 <= 3", file)
     @test occursin("Var4 >= 5.5", file)
     @test occursin("V3 >= -3", file)
@@ -580,7 +635,6 @@ function test_read_model2()
 end
 
 function test_read_objective_sense()
-    model = LP.Model()
     cases = Dict(
         "max" => MOI.MAX_SENSE,
         "maximize" => MOI.MAX_SENSE,
@@ -592,7 +646,9 @@ function test_read_objective_sense()
         "minimum" => MOI.MIN_SENSE,
     )
     for (sense, result) in cases
-        LP._set_objective_sense(LP._KW_OBJECTIVE, model, sense)
+        model = LP.Model()
+        io = IOBuffer("$sense\nx")
+        read!(io, model)
         @test MOI.get(model, MOI.ObjectiveSense()) == result
     end
     return
@@ -612,17 +668,21 @@ end
 function test_read_maximum_length_error()
     filename = joinpath(@__DIR__, "models", "model2.lp")
     model = LP.Model(; maximum_length = 1)
-    @test_throws(
-        ErrorException("Name exceeds maximum length: V4"),
-        MOI.read_from_file(model, filename),
-    )
+    contents = try
+        MOI.read_from_file(model, filename)
+    catch err
+        sprint(showerror, err)
+    end
+    @test contents == """
+    Error parsing LP file on line 2:
+    obj: - 2 - 1 V4 + 1 V5 + 3 + 2 - 0.5
+                 ^
+    Got an identifier with value `V4`. Name (V4) exceeds maximum length (1)"""
     return
 end
 
 function test_default_bound()
-    io = IOBuffer()
-    write(io, "minimize\nobj: x + y")
-    seekstart(io)
+    io = IOBuffer("minimize\nobj: x + y")
     model = LP.Model()
     MOI.read!(io, model)
     x = MOI.get(model, MOI.ListOfVariableIndices())
@@ -635,9 +695,7 @@ function test_default_bound()
 end
 
 function test_default_bound_double_bound()
-    io = IOBuffer()
-    write(io, "minimize\nobj: x\nsubject to\nbounds\n x <= -1\n x >= -2")
-    seekstart(io)
+    io = IOBuffer("minimize\nobj: x\nsubject to\nbounds\n x <= -1\n x >= -2")
     model = LP.Model()
     MOI.read!(io, model)
     x = first(MOI.get(model, MOI.ListOfVariableIndices()))
@@ -710,9 +768,7 @@ function test_quadratic_newline_edge_cases()
         "+ [ x^2\n]\n/2 \\ comment\n",
         "+ \n[ x^2\n]\n/2 \\ comment\n",
     ]
-        io = IOBuffer()
-        write(io, "Minimize\nobj: x $(case)\nEnd")
-        seekstart(io)
+        io = IOBuffer("Minimize\nobj: x $(case)\nEnd")
         model = MOI.FileFormats.LP.Model()
         read!(io, model)
         out = IOBuffer()
@@ -735,9 +791,7 @@ function test_quadratic_newline_edge_cases()
         "+ [ x^2\n] \\ comment",
         "+ \n[ x^2\n] \\ comment",
     ]
-        io = IOBuffer()
-        write(io, "Minimize\nobj: x $(case)\nEnd")
-        seekstart(io)
+        io = IOBuffer("Minimize\nobj: x $(case)\nEnd")
         model = MOI.FileFormats.LP.Model()
         read!(io, model)
         out = IOBuffer()
@@ -757,9 +811,7 @@ function test_newline_inequality()
         "x +\n y <= 2",
         "x\n+ y <= 2",
     ]
-        io = IOBuffer()
-        write(io, "Minimize\nobj: x\nSubject to\nc1: $(case)\nEnd")
-        seekstart(io)
+        io = IOBuffer("Minimize\nobj: x\nSubject to\nc1: $(case)\nEnd")
         model = MOI.FileFormats.LP.Model()
         read!(io, model)
         out = IOBuffer()
@@ -786,9 +838,7 @@ function test_wrong_way_bounds()
         "2 < x" => "x >= 2",
         "2 = x" => "x = 2",
     ]
-        io = IOBuffer()
-        write(io, "Minimize\nobj: x\nSubject to\nBounds\n$(case)\nEnd")
-        seekstart(io)
+        io = IOBuffer("Minimize\nobj: x\nSubject to\nBounds\n$(case)\nEnd")
         model = MOI.FileFormats.LP.Model()
         read!(io, model)
         out = IOBuffer()
@@ -801,9 +851,7 @@ function test_wrong_way_bounds()
 end
 
 function test_variable_coefficient_variable()
-    io = IOBuffer()
-    write(io, "Minimize\nobj: x -1 y\nEnd")
-    seekstart(io)
+    io = IOBuffer("Minimize\nobj: x -1 y\nEnd")
     model = MOI.FileFormats.LP.Model()
     read!(io, model)
     out = IOBuffer()
@@ -971,8 +1019,7 @@ function test_read_newline_breaks()
     + z ==
     0
     Bounds
-    x >= 0
-    -1 <= y
+    x >= 0 -1 <= y
     +1 <= z <= +2
     End
     """
@@ -1080,36 +1127,44 @@ end
 
 function test_invalid_token_in_sos()
     model = LP.Model()
-    io = IOBuffer()
-    print(
-        io,
-        """
-        minimize
-        obj: x + y
-        subject to
-        SOS
-        c11: S1:: x 1.0 y 2.0
-        """,
-    )
-    seekstart(io)
-    @test_throws(
-        ErrorException("Invalid token in SOS constraint: x"),
-        read!(io, model),
-    )
+    io = IOBuffer("""
+                  minimize
+                  obj: x + y
+                  subject to
+                  SOS
+                  c11: S1:: x 1.0 y 2.0
+                  """)
+    contents = try
+        read!(io, model)
+    catch err
+        sprint(showerror, err)
+    end
+    @test contents == """
+    Error parsing LP file on line 5:
+    c11: S1:: x 1.0 y 2.0
+                ^
+    Got a number with value `1.0`. We expected this token to be the symbol `:`."""
     return
 end
 
 function test_unable_to_parse_bound()
     io = IOBuffer("""
-    minimize
-    obj: 1 x
-    subject to
-    bounds
-    x
-    end
-    """)
+                  minimize
+                  obj: 1 x
+                  subject to
+                  bounds
+                  x
+                  end
+                  """)
     model = LP.Model()
-    @test_throws(ErrorException("Unable to parse bound: x"), read!(io, model))
+    @test_parse_error(
+        """
+        Error parsing LP file on line 6:
+        end
+        ^
+        Got a keyword defining a new section with value `END`. We expected this to be an inequality like `>=`, `<=`, or `==`.""",
+        read!(io, model),
+    )
     return
 end
 
@@ -1185,6 +1240,574 @@ function test_int_round_trip()
         """,
     ]
         _test_int_round_trip(src)
+    end
+    return
+end
+
+function test_unsupported_objectives()
+    model = LP.Model()
+    for (F, ret) in [
+        MOI.VariableIndex => true,
+        MOI.ScalarAffineFunction{Float64} => true,
+        MOI.ScalarQuadraticFunction{Float64} => true,
+        MOI.ScalarNonlinearFunction => false,
+        MOI.VectorOfVariables => false,
+        MOI.VectorAffineFunction{Float64} => false,
+        MOI.VectorQuadraticFunction{Float64} => false,
+        MOI.VectorNonlinearFunction => false,
+    ]
+        @test MOI.supports(model, MOI.ObjectiveFunction{F}()) == ret
+    end
+    return
+end
+
+function test_subject_to_name()
+    for (case, err) in [
+        "subject to" => false,
+        "Subject To" => false,
+        "such that" => false,
+        "Such That" => false,
+        "st" => false,
+        "s.t." => false,
+        "st." => false,
+        "subject that" => true,
+        "subject\nto" => true,
+        "s. t." => true,
+        "such to" => true,
+    ]
+        io = IOBuffer("Minimize\nobj: x\n$case\n2x == 1\nBounds\nx free\nEnd")
+        seekstart(io)
+        model = MOI.FileFormats.LP.Model()
+        if err
+            @test_parse_error(
+                """
+                Error parsing LP file on line 3:
+                $(first(split(case, "\n")))
+                ^
+                Got an identifier with value `$(first(split(case)))`. We expected this token to be a keyword defining a new section.""",
+                read!(io, model),
+            )
+        else
+            read!(io, model)
+            out = IOBuffer()
+            write(out, model)
+            seekstart(out)
+            file = read(out, String)
+            @test occursin("subject to\nc1: 2 x = 1\n", file)
+        end
+    end
+    return
+end
+
+function test_parse_identifier()
+    cache = LP._ReadCache(LP.Model{Float64}())
+    for input in [
+        "x",
+        "X",
+        "e",
+        "abc!\"D",
+        "π",
+        "𝔼1π!~a",
+        "x!\"#\$%&()/,.;?@_`'{}|~",
+        "aAc2",
+    ]
+        io = IOBuffer(input)
+        state = LP._LexerState(io)
+        x = LP._parse_identifier(state, cache)
+        @test cache.variable_name_to_index[input] == x
+    end
+    for input in ["2", "2x"]
+        state = LP._LexerState(IOBuffer(input))
+        @test_parse_error(
+            """
+            Error parsing LP file on line 1:
+            $(input)
+            ^
+            Got a number with value `2`. We expected this token to be an identifier.""",
+            LP._parse_identifier(state, cache),
+        )
+    end
+    state = LP._LexerState(IOBuffer(".x"))
+    @test_parse_error(
+        """
+        Error parsing LP file on line 1:
+        .x
+        ^
+        Got a token with value `.`. This character is not supported at the start of an identifier.""",
+        LP._parse_identifier(state, cache),
+    )
+    state = LP._LexerState(IOBuffer("❤x"))
+    @test_parse_error(
+        """
+        Error parsing LP file on line 1:
+        ❤x
+        ^
+        Got a token with value `❤`. This character is not supported in an LP file.""",
+        LP._parse_identifier(state, cache),
+    )
+    return
+end
+
+function test_parse_number()
+    cache = LP._ReadCache(LP.Model{Float64}())
+    for (input, result) in [
+        "1" => 1.0,
+        "02" => 2.0,
+        "- 1" => -1.0,
+        "- -1" => 1.0,
+        "+ 1" => 1.0,
+        "+ -1" => -1.0,
+        "- + 1" => -1.0,
+        "+ + 1" => 1.0,
+        "+ - + 1" => -1.0,
+        "+ - + -1" => 1.0,
+        "inf" => Inf,
+        "-inf" => -Inf,
+        "- inf" => - Inf,
+        "iNf" => Inf,
+        "iNfinitY" => Inf,
+        "infinity" => Inf,
+        "1.23e+01" => 12.3,
+        "1.23e-1" => 0.123,
+        "1.23E-1" => 0.123,
+        "1.23E+3" => 1230.0,
+    ]
+        io = IOBuffer(input)
+        state = LP._LexerState(io)
+        @test LP._parse_number(state, cache) == result
+    end
+    for (input, reason) in [
+        "x" => "We expected this to be a number.",
+        "abc" => "We expected this to be a number.",
+        "ten" => "We expected this to be a number.",
+        "1.1.1" => "We were unable to parse this as a number.",
+        "1eE1" => "We were unable to parse this as a number.",
+    ]
+        io = IOBuffer(input)
+        state = LP._LexerState(io)
+        @test_parse_error(
+            """
+            Error parsing LP file on line 1:
+            $input
+            ^
+            Got an identifier with value `$input`. $reason""",
+            LP._parse_number(state, cache),
+        )
+    end
+    return
+end
+
+function test_parse_quad_term()
+    cache = LP._ReadCache(LP.Model{Float64}())
+    # Diagonal
+    for (input, coef) in [
+        "x * x" => 2.0,
+        "\nx * x" => 2.0,
+        "x\n * x" => 2.0,
+        "x * \n x" => 2.0,
+        "x^2" => 2.0,
+        "x ^ 2" => 2.0,
+        "+ x * x" => 2.0,
+        "+ 2 * x * x" => 4.0,
+        "- x * x" => -2.0,
+        "- 2 * x * x" => -4.0,
+        "-2 x * x" => -4.0,
+        "2.2 x * x" => 4.4,
+    ]
+        io = IOBuffer(input)
+        state = LP._LexerState(io)
+        term = LP._parse_quadratic_term(state, cache, 1.0)
+        x = cache.variable_name_to_index["x"]
+        @test term == MOI.ScalarQuadraticTerm(coef, x, x)
+        seekstart(io)
+        term = LP._parse_quadratic_term(state, cache, -1.0)
+        @test term == MOI.ScalarQuadraticTerm(-coef, x, x)
+    end
+    # Off-diagonal
+    for (input, coef) in [
+        "x * y" => 1.0,
+        "\nx * y" => 1.0,
+        "x\n * y" => 1.0,
+        "x * \n y" => 1.0,
+        "+ x * y" => 1.0,
+        "+ 2 * x * y" => 2.0,
+        "- x * y" => -1.0,
+        "- 2 * x * y" => -2.0,
+        "2.2 * x * y" => 2.2,
+        "2.2 x * y" => 2.2,
+    ]
+        io = IOBuffer(input)
+        state = LP._LexerState(io)
+        term = LP._parse_quadratic_term(state, cache, 1.0)
+        x = cache.variable_name_to_index["x"]
+        y = cache.variable_name_to_index["y"]
+        @test term == MOI.ScalarQuadraticTerm(coef, x, y)
+        seekstart(io)
+        term = LP._parse_quadratic_term(state, cache, -1.0)
+        @test term == MOI.ScalarQuadraticTerm(-coef, x, y)
+    end
+    for (input, reason) in [
+        "x^" => " ^\nGot a token with value `EOF`. Unexpected end to the file. We weren't finished yet.",
+        "x^x" => "  ^\nGot an identifier with value `x`. We expected this token to be a number.",
+        "x^0" => "  ^\nGot a number with value `0`. Only `^ 2` is supported.",
+        "x^1" => "  ^\nGot a number with value `1`. Only `^ 2` is supported.",
+        "x^3" => "  ^\nGot a number with value `3`. Only `^ 2` is supported.",
+        "x * 2  * x" => "    ^\nGot a number with value `2`. We expected this token to be an identifier.",
+    ]
+        io = IOBuffer(input)
+        state = LP._LexerState(io)
+        @test_parse_error(
+            """
+            Error parsing LP file on line 1:
+            $input
+            $reason""",
+            LP._parse_quadratic_term(state, cache, -1.0),
+        )
+    end
+    return
+end
+
+function test_parse_term()
+    cache = LP._ReadCache(LP.Model{Float64}())
+    for (input, coef) in [
+        "x" => 1.0,
+        "+ x" => 1.0,
+        "- x" => -1.0,
+        "- -x" => 1.0,
+        "+ -x" => -1.0,
+        "2x" => 2.0,
+        "2.0 x" => 2.0,
+        "3.0 x" => 3.0,
+        "2.0 * x" => 2.0,
+        "3.2 * x" => 3.2,
+    ]
+        io = IOBuffer(input)
+        state = LP._LexerState(io)
+        term = LP._parse_term(state, cache, 1.0)
+        x = cache.variable_name_to_index["x"]
+        @test term == MOI.ScalarAffineTerm(coef, x)
+        seekstart(io)
+        term = LP._parse_term(state, cache, -1.0)
+        @test term == MOI.ScalarAffineTerm(-coef, x)
+    end
+    for (input, reason) in [">= 1" => "Got the symbol `>=`."]
+        io = IOBuffer(input)
+        state = LP._LexerState(io)
+        @test_parse_error(
+            """
+            Error parsing LP file on line 1:
+            $input
+            ^
+            $reason We expected this to be a new term in the expression.""",
+            LP._parse_term(state, cache, 1.0),
+        )
+    end
+    return
+end
+
+function test_parse_quad_expression()
+    cache = LP._ReadCache(LP.Model{Float64}())
+    for (input, reason) in [
+        "x^2" => "^\nGot an identifier with value `x`. We expected this token to be the symbol `[`.",
+        "[ x^2 ]/" => "       ^\nGot a token with value `EOF`. Unexpected end to the file. We weren't finished yet.",
+        "[ x^2 ]/3" => "        ^\nGot a number with value `3`. The only supported value here is `] / 2`.",
+    ]
+        io = IOBuffer(input)
+        state = LP._LexerState(io)
+        @test_parse_error(
+            """
+            Error parsing LP file on line 1:
+            $input
+            $reason""",
+            LP._parse_quadratic_expression(state, cache, 1.0),
+        )
+    end
+    return
+end
+
+function test_parse_set_prefix()
+    cache = LP._ReadCache(LP.Model{Float64}())
+    for (input, set) in [
+        "1.0 <=" => MOI.GreaterThan(1.0),
+        "1.0 <" => MOI.GreaterThan(1.0),
+        "1.0 >=" => MOI.LessThan(1.0),
+        "1.0 >" => MOI.LessThan(1.0),
+        "1.0 ==" => MOI.EqualTo(1.0),
+        "1.0 =" => MOI.EqualTo(1.0),
+        # Theirs not to reason why, theirs but to do and
+        "1.0 =<" => MOI.GreaterThan(1.0),
+        "1.0 =>" => MOI.LessThan(1.0),
+    ]
+        io = IOBuffer(input)
+        state = LP._LexerState(io)
+        @test LP._parse_set_prefix(state, cache) == set
+    end
+    io = IOBuffer("1.0 ->")
+    state = LP._LexerState(io)
+    @test_parse_error(
+        """
+        Error parsing LP file on line 1:
+        1.0 ->
+            ^
+        Got the symbol `->`. We expected this to be an inequality like `>=`, `<=`, or `==`.""",
+        LP._parse_set_prefix(state, cache),
+    )
+    return
+end
+
+function test_parse_set_sufffix()
+    cache = LP._ReadCache(LP.Model{Float64}())
+    for (input, set) in [
+        "free" => nothing,
+        "Free" => nothing,
+        ">= 1.0" => MOI.GreaterThan(1.0),
+        "> 1.0" => MOI.GreaterThan(1.0),
+        "<= 1.0" => MOI.LessThan(1.0),
+        "< 1.0" => MOI.LessThan(1.0),
+        "== 1.0" => MOI.EqualTo(1.0),
+        "= 1.0" => MOI.EqualTo(1.0),
+        # Theirs not to reason why, theirs but to do and
+        "=< 1.0" => MOI.LessThan(1.0),
+        "=> 1.0" => MOI.GreaterThan(1.0),
+    ]
+        io = IOBuffer(input)
+        state = LP._LexerState(io)
+        @test LP._parse_set_suffix(state, cache) == set
+    end
+    io = IOBuffer("-> 1")
+    state = LP._LexerState(io)
+    @test_parse_error(
+        """
+        Error parsing LP file on line 1:
+        -> 1
+        ^
+        Got the symbol `->`. We expected this to be an inequality like `>=`, `<=`, or `==`.""",
+        LP._parse_set_suffix(state, cache),
+    )
+    return
+end
+
+function test_new_line_edge_cases()
+    target = "minimize\nobj: 1 x + 1 y\nsubject to\nc: 1 x <= 1\nBounds\nx >= 0\ny >= 0\nEnd\n"
+    for input in [
+        # Good
+        "minimize\nobj: x + y\nsubject to\nc: x <= 1\nend",
+        # Blank lines at the start
+        "\n\nminimize\nobj: x + y\nsubject to\nc: x <= 1\nend",
+        # Blank lines after minimize
+        "minimize\n\n\nobj: x + y\nsubject to\nc: x <= 1\nend",
+        # Blank lines between obj: and expression
+        "minimize\nobj:\n\nx + y\nsubject to\nc: x <= 1\nend",
+        # Blank lines throughout objective expression
+        "minimize\nobj:\nx \n+ \ny\nsubject to\nc: x <= 1\nend",
+        # Blank lines after objective expression
+        "minimize\nobj: x + y\n\nsubject to\nc: x <= 1\nend",
+        # Blank lines after subject to
+        "minimize\nobj: x + y\nsubject to\n\n\nc: x <= 1\nend",
+        # Blank lines in constraint
+        "minimize\nobj: x + y\nsubject to\nc:\nx\n<=\n1\nend",
+        # Blank lines around end
+        "minimize\nobj: x + y\nsubject to\nc: x <= 1\n\nend\n\n\n",
+        # Comment before newline
+        "minimize\\comment\nobj: x + y\nsubject to\nc: x <= 1\nend",
+        "minimize\nobj: x + y\\comment\nsubject to\nc: x <= 1\nend",
+        "minimize\nobj: x + y\nsubject to\\comment\nc: x <= 1\nend",
+        "minimize\nobj: x + y\nsubject to\nc: x <= 1\\comment\nend",
+        "minimize\nobj: x + y\nsubject to\nc: x <= 1\nend\\comment",
+    ]
+        io = IOBuffer(input)
+        model = LP.Model()
+        MOI.read!(io, model)
+        @test sprint(MOI.write, model) == target
+    end
+    return
+end
+
+function test_new_line_edge_cases_sos()
+    target = "minimize\nobj: 1 x + 1 y\nsubject to\nBounds\nx >= 0\ny >= 0\nSOS\nc: S1:: x:1.0 y:2.0\nEnd\n"
+    for input in [
+        "minimize\nobj: x + y\nsubject to\nc: S1:: x:1 y:2\nend",
+        "minimize\nobj: x + y\nsubject to\nc: S1:: x:1 y:2\n\nend",
+        "minimize\nobj: x + y\nsubject to\n\nc: S1:: x:1 y:2\n\nend",
+        "minimize\nobj: x + y\nsubject to\n\nc: S1:: x:1 y:2\\comment\nend",
+    ]
+        io = IOBuffer(input)
+        model = LP.Model()
+        MOI.read!(io, model)
+        @test sprint(MOI.write, model) == target
+    end
+    return
+end
+
+function test_missing_new_line_edge_cases()
+    for input in [
+        # No newline between objective sense and objective
+        "minimize x",
+        "maximize x",
+        "maximize c: x",
+        # No new line between objective and subject to
+        "maximize\nobj: x subject to",
+        # No new line between subject to and constraint
+        "maximize\nobj: x\nsubject to c: x >= 0",
+    ]
+        io = IOBuffer(input)
+        model = LP.Model()
+        MOI.read!(io, model)
+        @test MOI.get(model, MOI.VariableIndex, "x") isa MOI.VariableIndex
+    end
+    return
+end
+
+function test_parse_keyword_edge_cases_identifier_is_keyword()
+    for name in ["max", "min", "st", "such", "bounds", "obj", "free"]
+        io = IOBuffer("""
+        maximize
+        obj: $name
+        subject to
+        $name <= 1
+        bounds
+        $name free
+        end
+        """)
+        model = LP.Model()
+        MOI.read!(io, model)
+        x = only(MOI.get(model, MOI.ListOfVariableIndices()))
+        @test MOI.get(model, MOI.VariableName(), x) == name
+    end
+    return
+end
+
+function test_parse_keyword_subject_to_errors()
+    for line in ["subject", "subject too"]
+        io = IOBuffer("""
+        maximize
+        obj: x
+        $line
+        x <= 1
+        bounds
+        x free
+        end
+        """)
+        model = LP.Model()
+        @test_parse_error(
+            """
+            Error parsing LP file on line 3:
+            $line
+            ^
+            Got an identifier with value `subject`. We expected this token to be a keyword defining a new section.""",
+            MOI.read!(io, model),
+        )
+    end
+    return
+end
+
+function test_parse_newline_in_objective_expression()
+    for obj in ["2 x", "\n2 x", "2\nx", "2*\nx", "2\n*x", "2\n\n*\n\n\nx\n"]
+        io = IOBuffer("""
+        maximize
+        obj: $obj
+        subject to
+        bounds
+        x free
+        end
+        """)
+        model = LP.Model()
+        MOI.read!(io, model)
+        x = MOI.get(model, MOI.VariableIndex, "x")
+        f = 2.0 * x
+        g = MOI.get(model, MOI.ObjectiveFunction{typeof(f)}())
+        @test isapprox(f, g)
+    end
+    return
+end
+
+function test_parse_subject_eof()
+    io = IOBuffer("maximize\nobj:\nsubject")
+    model = LP.Model()
+    MOI.read!(io, model)
+    x = MOI.get(model, MOI.VariableIndex, "subject")
+    @test x isa MOI.VariableIndex
+    return
+end
+
+function test_parse_expr_eof()
+    io = IOBuffer("maximize\nobj: x + 2\n")
+    model = LP.Model()
+    MOI.read!(io, model)
+    x = MOI.get(model, MOI.VariableIndex, "x")
+    f = 1.0 * x + 2.0
+    g = MOI.get(model, MOI.ObjectiveFunction{typeof(f)}())
+    @test isapprox(f, g)
+    return
+end
+
+function test_parse_quadratic_expr_eof()
+    io = IOBuffer("maximize\nobj: [x * x]\n")
+    model = LP.Model()
+    MOI.read!(io, model)
+    x = MOI.get(model, MOI.VariableIndex, "x")
+    f = 1.0 * x * x
+    g = MOI.get(model, MOI.ObjectiveFunction{typeof(f)}())
+    @test isapprox(f, g)
+    return
+end
+
+function test_ambiguous_case_1()
+    # Xpress allows this. We currently do too.
+    for kw in ("subject to", "such that", "st")
+        io = IOBuffer("maximize obj: x $kw c: x <= 1\nend")
+        model = LP.Model()
+        MOI.read!(io, model)
+        @test MOI.get(model, MOI.ObjectiveSense()) == MOI.MAX_SENSE
+        F, S = MOI.ScalarAffineFunction{Float64}, MOI.LessThan{Float64}
+        @test isa(
+            MOI.get(model, MOI.ConstraintIndex, "c"),
+            MOI.ConstraintIndex{F,S},
+        )
+    end
+    return
+end
+
+function test_ambiguous_case_2()
+    # Xpress allows this. We currently parse this as two "<keyword-constraint>"
+    # sections, and think that there is no objective function.
+    io = IOBuffer("min\nst\nst\nst >= 0\nend")
+    model = LP.Model()
+    MOI.read!(io, model)
+    st = MOI.get(model, MOI.VariableIndex, "st")
+    @test_broken MOI.get(model, MOI.ObjectiveSense()) == MOI.MIN_SENSE
+    f = 1.0 * st
+    @test_broken isapprox(MOI.get(model, MOI.ObjectiveFunction{typeof(f)}()), f)
+    return
+end
+
+function test_ambiguous_case_3()
+    # Gurobi doesn't allow this, but Xpress does. We do.
+    io = IOBuffer("min\nobj: end\nsubject to\nc: end <= 1\nend")
+    model = LP.Model()
+    MOI.read!(io, model)
+    x = MOI.get(model, MOI.VariableIndex, "end")
+    @test MOI.get(model, MOI.ObjectiveSense()) == MOI.MIN_SENSE
+    f = 1.0 * x
+    @test isapprox(MOI.get(model, MOI.ObjectiveFunction{typeof(f)}()), f)
+    return
+end
+
+function test_get_line_about_pos()
+    for (input, output) in [
+        "x" => ("x", 1),
+        "\nx" => ("x", 1),
+        "x\n" => ("x", 1),
+        "x + y\n" => ("x + y", 1),
+        "\ny + x\n" => ("y + x", 5),
+        "\n❤ + x\n" => ("❤ + x", 5),
+        "♡♡♡♡♡♡♡♡♡♡ + x + ♡♡♡♡♡♡♡♡♡♡" => ("♡♡ + x + ♡♡♡", 6),
+        "♡♡♡♡♡♡♡♡♡\n♡ + x + ♡\n♡♡♡♡♡♡♡♡♡" => ("♡ + x + ♡", 5),
+    ]
+        io = IOBuffer(input)
+        readuntil(io, 'x')
+        pos = position(io)
+        @test output == LP._get_line_about_pos(IOBuffer(input), pos, 10)
     end
     return
 end

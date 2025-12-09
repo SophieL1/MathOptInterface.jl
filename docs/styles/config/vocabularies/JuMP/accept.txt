@@ -52,7 +52,10 @@ Hijazi
 Holy
 JSONSchema
 MOI
+Mosek
 PATHSolver
+QSopt
 preprint
 Lubin
 Nemirovski
+Xpress

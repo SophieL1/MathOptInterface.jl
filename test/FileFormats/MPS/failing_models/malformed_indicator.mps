@@ -5,6 +5,7 @@ ROWS
  G  con1
 COLUMNS
     x         obj       1              con1      1
+    z         obj       0   
 RHS
     rhs       con1      1
 RANGES

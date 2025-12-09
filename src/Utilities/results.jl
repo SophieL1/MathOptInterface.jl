@@ -52,106 +52,6 @@ end
 
 # MOI.DualObjectiveValue
 
-function _constraint_constant(
-    model::MOI.ModelLike,
-    ci::MOI.ConstraintIndex{
-        <:MOI.AbstractVectorFunction,
-        <:MOI.AbstractVectorSet,
-    },
-    ::Type{T},
-) where {T}
-    return MOI.constant(MOI.get(model, MOI.ConstraintFunction(), ci), T)
-end
-
-function _constraint_constant(
-    model::MOI.ModelLike,
-    ci::MOI.ConstraintIndex{
-        <:MOI.AbstractScalarFunction,
-        <:MOI.AbstractScalarSet,
-    },
-    ::Type{T},
-) where {T}
-    return MOI.constant(MOI.get(model, MOI.ConstraintFunction(), ci), T) -
-           MOI.constant(MOI.get(model, MOI.ConstraintSet(), ci))
-end
-
-function _dual_objective_value(
-    model::MOI.ModelLike,
-    ci::MOI.ConstraintIndex,
-    ::Type{T},
-    result_index::Integer,
-) where {T}
-    return set_dot(
-        _constraint_constant(model, ci, T),
-        MOI.get(model, MOI.ConstraintDual(result_index), ci),
-        MOI.get(model, MOI.ConstraintSet(), ci),
-    )
-end
-
-function _dual_objective_value(
-    model::MOI.ModelLike,
-    ci::MOI.ConstraintIndex{<:MOI.AbstractScalarFunction,<:MOI.Interval},
-    ::Type{T},
-    result_index::Integer,
-) where {T}
-    constant = MOI.constant(MOI.get(model, MOI.ConstraintFunction(), ci), T)
-    set = MOI.get(model, MOI.ConstraintSet(), ci)
-    dual = MOI.get(model, MOI.ConstraintDual(result_index), ci)
-    if dual < zero(dual)
-        # The dual is negative so it is in the dual of the MOI.LessThan cone
-        # hence the upper bound of the Interval set is tight
-        constant -= set.upper
-    else
-        # the lower bound is tight
-        constant -= set.lower
-    end
-    return set_dot(constant, dual, set)
-end
-
-function _dual_objective_value(
-    model::MOI.ModelLike,
-    ci::MOI.ConstraintIndex{<:MOI.AbstractVectorFunction,<:MOI.HyperRectangle},
-    ::Type{T},
-    result_index::Integer,
-) where {T}
-    func_constant =
-        MOI.constant(MOI.get(model, MOI.ConstraintFunction(), ci), T)
-    set = MOI.get(model, MOI.ConstraintSet(), ci)
-    dual = MOI.get(model, MOI.ConstraintDual(result_index), ci)
-    constant = map(eachindex(func_constant)) do i
-        return func_constant[i] - if dual[i] < zero(dual[i])
-            # The dual is negative so it is in the dual of the MOI.LessThan cone
-            # hence the upper bound of the Interval set is tight
-            set.upper[i]
-        else
-            # the lower bound is tight
-            set.lower[i]
-        end
-    end
-    return set_dot(constant, dual, set)
-end
-
-function _dual_objective_value(
-    model::MOI.ModelLike,
-    ::Type{F},
-    ::Type{S},
-    ::Type{T},
-    result_index::Integer,
-) where {T,F<:MOI.AbstractFunction,S<:MOI.AbstractSet}
-    value = zero(T)
-    if F == variable_function_type(S) && !_has_constant(S)
-        return value # Shortcut
-    end
-    for ci in MOI.get(model, MOI.ListOfConstraintIndices{F,S}())
-        value += _dual_objective_value(model, ci, T, result_index)
-    end
-    return value
-end
-
-_has_constant(::Type{<:MOI.AbstractScalarSet}) = true
-_has_constant(::Type{<:MOI.AbstractVectorSet}) = false
-_has_constant(::Type{<:MOI.HyperRectangle}) = true
-
 """
     get_fallback(
         model::MOI.ModelLike,
@@ -184,6 +84,72 @@ function get_fallback(
         value += MOI.constant(f, T)
     end
     return value::T
+end
+
+function _dual_objective_value(
+    model::MOI.ModelLike,
+    ::Type{F},
+    ::Type{S},
+    ::Type{T},
+    result_index::Integer,
+)::T where {T,F<:MOI.AbstractFunction,S<:MOI.AbstractSet}
+    value = zero(T)
+    if F == variable_function_type(S) && !_variable_set_in_dual_objective(S)
+        # Early return. This is a constraint like x in R_+, so no contribution
+        # appears in the dual objective.
+        return value
+    end
+    for ci in MOI.get(model, MOI.ListOfConstraintIndices{F,S}())
+        constant = MOI.constant(MOI.get(model, MOI.ConstraintFunction(), ci), T)
+        set = MOI.get(model, MOI.ConstraintSet(), ci)
+        dual = MOI.get(model, MOI.ConstraintDual(result_index), ci)
+        value += _dual_objective_dot(constant, dual, set)
+    end
+    return value
+end
+
+_variable_set_in_dual_objective(::Type{<:MOI.AbstractSet}) = false
+
+_variable_set_in_dual_objective(::Type{<:MOI.EqualTo}) = true
+
+_variable_set_in_dual_objective(::Type{<:MOI.GreaterThan}) = true
+
+_variable_set_in_dual_objective(::Type{<:MOI.LessThan}) = true
+
+_variable_set_in_dual_objective(::Type{<:MOI.Interval}) = true
+
+_variable_set_in_dual_objective(::Type{<:MOI.HyperRectangle}) = true
+
+_dual_objective_dot(x, y, set) = set_dot(x, y, set)
+
+_dual_objective_dot(x, y, set::MOI.EqualTo) = (x - set.value) * y
+
+_dual_objective_dot(x, y, set::MOI.LessThan) = (x - set.upper) * y
+
+_dual_objective_dot(x, y, set::MOI.GreaterThan) = (x - set.lower) * y
+
+function _dual_objective_dot(x, y, set::MOI.Interval)
+    if isfinite(set.lower) && (!isfinite(set.upper) || y > zero(y))
+        return (x - set.lower) * y
+    elseif isfinite(set.upper) && (!isfinite(set.lower) || y < zero(y))
+        return (x - set.upper) * y
+    end
+    return x * y
+end
+
+function _dual_objective_dot(x, y, set::MOI.HyperRectangle)
+    @assert length(x) == length(y) == MOI.dimension(set)
+    ret = zero(eltype(x))
+    for (xi, yi, li, ui) in zip(x, y, set.lower, set.upper)
+        if isfinite(li) && (!isfinite(ui) || yi > zero(yi))
+            ret += (xi - li) * yi
+        elseif isfinite(ui) && (!isfinite(li) || yi < zero(yi))
+            ret += (xi - ui) * yi
+        else
+            ret += xi * yi
+        end
+    end
+    return ret
 end
 
 # MOI.ConstraintPrimal

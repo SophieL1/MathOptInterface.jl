@@ -10,7 +10,7 @@ using Test
 
 import MathOptInterface as MOI
 import MathOptInterface.FileFormats: MPS
-import DataStructures: OrderedDict
+import OrderedCollections: OrderedDict
 
 function runtests()
     for name in names(@__MODULE__; all = true)
@@ -71,23 +71,29 @@ function test_nonempty()
     MOI.empty!(model)
     @test MOI.is_empty(model)
     MOI.add_variable(model)
-    @test_throws Exception MOI.read_from_file(
-        model,
-        joinpath(@__DIR__, "failing_models", "bad_name.mps"),
+    @test_throws(
+        ErrorException("Cannot read in file because model is not empty."),
+        MOI.read_from_file(model, joinpath(@__DIR__, "free_integer.mps")),
     )
     return
 end
 
 function test_failing_models()
-    @testset "$(filename)" for filename in filter(
-        f -> endswith(f, ".mps"),
-        readdir(joinpath(@__DIR__, "failing_models")),
-    )
-        @test_throws Exception MOI.read_from_file(
-            MPS.Model(),
-            joinpath(@__DIR__, "failing_models", filename),
+    dir = joinpath(@__DIR__, "failing_models")
+    @testset "$file" for file in filter(endswith(".mps"), readdir(dir))
+        @test_throws(
+            MPS.ParseError,
+            MOI.read_from_file(MPS.Model(), joinpath(dir, file))
         )
+        @info file
+        try
+            MOI.read_from_file(MPS.Model(), joinpath(dir, file))
+        catch err
+            showerror(stdout, err)
+        end
+        println()
     end
+    return
 end
 
 function test_empty_row_name()
@@ -1122,8 +1128,7 @@ function test_parse_name_line()
     )
         data.name = "_"
         if name === nothing
-            err = ErrorException("Malformed NAME line: $line")
-            @test_throws err MPS.parse_name_line(data, line)
+            @test_throws MPS.ParseError MPS.parse_name_line(data, line)
         else
             MPS.parse_name_line(data, line)
             @test data.name == name
@@ -1501,10 +1506,7 @@ function test_rhs_free_row()
     ENDATA
     """)
     model = MPS.Model()
-    @test_throws(
-        ErrorException("Cannot have RHS for free row: rhs c 1"),
-        read!(io, model),
-    )
+    @test_throws MPS.ParseError read!(io, model)
     return
 end
 
@@ -1526,10 +1528,7 @@ function test_malformed_indicator()
     ENDATA
     """)
     model = MPS.Model()
-    @test_throws(
-        ErrorException("Malformed INDICATORS line: IF c1 y"),
-        read!(io, model),
-    )
+    @test_throws MPS.ParseError read!(io, model)
     return
 end
 
@@ -1672,6 +1671,60 @@ function test_duplicate_coefficient()
     f = MOI.get(dest, MOI.ConstraintFunction(), c)
     @test isapprox(f, 2.0 * x)
     @test MOI.get(dest, MOI.ConstraintSet(), c) == MOI.EqualTo(1.0)
+    return
+end
+
+function test_issue_2792()
+    src = """
+    NAME
+    ROWS
+     N  OBJ       \$t3       0
+    COLUMNS
+        x         OBJ       2
+    RHS
+        rhs       OBJ       -3
+    BOUNDS
+     LO bounds    x         1
+     PL bounds    x
+    ENDATA
+    """
+    model = MPS.Model()
+    read!(IOBuffer(src), model)
+    dest = MOI.Utilities.Model{Float64}()
+    MOI.copy_to(dest, model)
+    @test MOI.get(dest, MOI.ListOfConstraintTypesPresent()) ==
+          [(MOI.VariableIndex, MOI.GreaterThan{Float64})]
+    x = only(MOI.get(dest, MOI.ListOfVariableIndices()))
+    F = MOI.get(dest, MOI.ObjectiveFunctionType())
+    f = MOI.get(dest, MOI.ObjectiveFunction{F}())
+    @test isapprox(f, 2.0 * x + 3.0)
+    return
+end
+
+function test_issue_2797_tab()
+    @test MPS.line_to_items("a b") == ["a", "b"]
+    @test MPS.line_to_items(" a b") == ["a", "b"]
+    @test MPS.line_to_items("a\tb") == ["a", "b"]
+    @test MPS.line_to_items("a\tb") == ["a", "b"]
+    @test MPS.line_to_items("a\t b") == ["a", "b"]
+    @test MPS.line_to_items(" a \t b      c ") == ["a", "b", "c"]
+    return
+end
+
+function test_unsupported_objectives()
+    model = MPS.Model()
+    for (F, ret) in [
+        MOI.VariableIndex => true,
+        MOI.ScalarAffineFunction{Float64} => true,
+        MOI.ScalarQuadraticFunction{Float64} => true,
+        MOI.ScalarNonlinearFunction => false,
+        MOI.VectorOfVariables => false,
+        MOI.VectorAffineFunction{Float64} => false,
+        MOI.VectorQuadraticFunction{Float64} => false,
+        MOI.VectorNonlinearFunction => false,
+    ]
+        @test MOI.supports(model, MOI.ObjectiveFunction{F}()) == ret
+    end
     return
 end
 

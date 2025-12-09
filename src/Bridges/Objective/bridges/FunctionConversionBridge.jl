@@ -14,7 +14,7 @@
 
 for these pairs of functions:
 
- * [`MOI.ScalarAffineFunction`](@ref)` to [`MOI.ScalarQuadraticFunction`](@ref)
+ * [`MOI.ScalarAffineFunction`](@ref) to [`MOI.ScalarQuadraticFunction`](@ref)
  * [`MOI.ScalarQuadraticFunction`](@ref)  to [`MOI.ScalarNonlinearFunction`](@ref)
  * [`MOI.VectorAffineFunction`](@ref) to [`MOI.VectorQuadraticFunction`](@ref)
 
@@ -45,7 +45,8 @@ function supports_objective_function(
     ::Type{<:FunctionConversionBridge{T,F}},
     ::Type{G},
 ) where {T,F,G<:MOI.AbstractFunction}
-    return isfinite(MOI.Bridges.Constraint.conversion_cost(F, G))
+    return MOI.Utilities.is_coefficient_type(G, T) &&
+           isfinite(MOI.Bridges.Constraint.conversion_cost(F, G))
 end
 
 function MOI.Bridges.bridging_cost(
@@ -172,6 +173,34 @@ const QuadratizeBridge{T,G} =
 
 const Quadratize{T,OT<:MOI.ModelLike} =
     SingleBridgeOptimizer{QuadratizeBridge{T},OT}
+
+"""
+    ToScalarNonlinearBridge{T,G} <: FunctionConversionBridge{T,MOI.ScalarNonlinearFunction,G}
+
+`ToScalarNonlinearBridge` implements the following reformulations:
+
+ * ``\\min\\{x^\\top \\mathbf{𝑄} x + a^\\top x + b\\}`` into ``\\min\\{f(x)\\}``
+ * ``\\max\\{x^\\top \\mathbf{𝑄} x + a^\\top x + b\\}`` into ``\\max\\{f(x)\\}``
+
+where `f(x)` is a `MOI.ScalarNonlinearFunction`.
+
+## Source node
+
+`ToScalarNonlinearBridge` supports:
+
+ * [`MOI.ObjectiveFunction{G}`](@ref)
+
+## Target nodes
+
+`ToScalarNonlinearBridge` creates:
+
+ * One objective node: [`MOI.ObjectiveFunction{MOI.ScalarNonlinearFunction}`](@ref)
+"""
+const ToScalarNonlinearBridge{T,G} =
+    FunctionConversionBridge{T,MOI.ScalarNonlinearFunction,G}
+
+const ToScalarNonlinear{T,OT<:MOI.ModelLike} =
+    SingleBridgeOptimizer{ToScalarNonlinearBridge{T},OT}
 
 """
     VectorFunctionizeBridge{T,G} <: FunctionConversionBridge{T,MOI.VectorAffineFunction{T},G}
